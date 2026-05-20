@@ -1,0 +1,8 @@
+{
+  "name": "SeguroAuto AI",
+  "description": "Um agente inteligente especializado em seguros automotivos, oferecendo cotações personalizadas e suporte especializado via IA.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
