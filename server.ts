@@ -1,4 +1,5 @@
 import cors from "cors";
+import crypto from "crypto";
 import dotenv from "dotenv";
 import express from "express";
 import fs from "fs";
@@ -6,9 +7,10 @@ import { spawn } from "child_process";
 import nodemailer from "nodemailer";
 import path from "path";
 import { Pool } from "pg";
-import { createServer as createViteServer } from "vite";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
-import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
+import { ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
+import { Document } from "@langchain/core/documents";
+import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 
 dotenv.config();
 
@@ -56,6 +58,15 @@ type Agent = {
   active: boolean;
 };
 
+type Conversation = {
+  id: number;
+  lead_id: number;
+  channel: string;
+  access_token: string | null;
+  started_at: string;
+  ended_at: string | null;
+};
+
 type ExtractedLeadData = Partial<
   Pick<
     Lead,
@@ -84,76 +95,424 @@ type ExtractedLeadData = Partial<
   >
 >;
 
-const REQUIRED_FIELDS: Array<keyof Lead> = [
-  "person_type",
-  "full_name",
-  "renewal",
-  "birth_date",
-  "cpf_cnpj",
-  "cep",
-  "vehicle_model",
-  "vehicle_year",
-  "plate",
-  "app_usage",
-  "has_young_driver",
-];
-
 const FIELD_LABELS: Record<string, string> = {
   person_type: "tipo de cliente (PF/PJ)",
-  renewal: "se e renovacao",
+  renewal: "se é renovação",
   full_name: "nome completo",
   birth_date: "data de nascimento",
+  marital_status: "estado civil",
   cpf_cnpj: "CPF ou CNPJ",
   cep: "CEP",
-  vehicle_model: "modelo do veiculo",
-  vehicle_year: "ano do veiculo",
+  vehicle_model: "modelo do veículo",
+  vehicle_year: "ano do veículo",
   plate: "placa",
   app_usage: "uso para app (Uber/99)",
   has_young_driver: "condutor entre 18 e 25 anos",
+  has_home_garage: "garagem na residência",
+  residence_type: "tipo de residência",
+  work_commute_usage: "uso para ir ao trabalho",
+  work_garage: "garagem no trabalho",
+  third_party_coverage_value: "valor de cobertura para terceiros",
+  fleet_complexity: "complexidade da frota",
+  special_condition: "condição especial PJ",
+  email: "e-mail",
 };
 
 const QUESTION_BY_FIELD: Record<string, string> = {
-  person_type: "Seu seguro e para Pessoa Fisica (PF) ou Pessoa Juridica (PJ)?",
-  renewal: "E renovacao de apolice? (sim ou nao)",
+  person_type: "Seu seguro é para Pessoa Física (PF) ou Pessoa Jurídica (PJ)?",
+  renewal: "É renovação de apólice? (sim ou não)",
   full_name: "Qual seu nome completo?",
   birth_date: "Qual sua data de nascimento?",
+  marital_status: "Qual seu estado civil?",
   cpf_cnpj: "Qual seu CPF (ou CNPJ, se for PJ)?",
-  cep: "Qual o CEP de pernoite do veiculo?",
-  vehicle_model: "Qual o modelo do veiculo?",
-  vehicle_year: "Qual o ano de fabricacao/modelo do veiculo?",
-  plate: "Qual a placa do veiculo?",
-  app_usage: "O veiculo e usado para app (Uber, 99 etc.)?",
-  has_young_driver: "Ha condutor entre 18 e 25 anos?",
+  cep: "Qual o CEP de pernoite do veículo?",
+  vehicle_model: "Qual o modelo do veículo?",
+  vehicle_year: "Qual o ano de fabricação/modelo do veículo?",
+  plate: "Qual a placa do veículo?",
+  app_usage: "O veículo é usado para app de transporte (Uber, 99 etc.)?",
+  has_young_driver: "Há condutor entre 18 e 25 anos?",
+  has_home_garage: "O veículo fica em garagem na sua residência? (sim ou não)",
+  residence_type: "Sua residência é casa ou apartamento?",
+  work_commute_usage: "Você usa o veículo para ir ao trabalho? (sim ou não)",
+  work_garage: "No trabalho, o veículo fica em garagem ou estacionamento fechado? (sim ou não)",
+  third_party_coverage_value: "Qual valor deseja para cobertura de terceiros? Se não souber, posso considerar de R$ 100 mil a R$ 150 mil para análise.",
+  fleet_complexity: "A frota é leve ou de média/alta complexidade?",
+  special_condition: "Há alguma condição especial para a empresa ou para os veículos? (sim ou não)",
   email: "Qual seu melhor e-mail para enviarmos o resumo e protocolo?",
 };
 
-const FAQS: Array<{ pattern: RegExp; answer: string }> = [
+type KnowledgeIntent = {
+  intent: string;
+  perguntas: string[];
+  resposta_curta: string;
+  fonte: string;
+  url: string;
+  tags: string[];
+};
+
+type KnowledgeChunk = {
+  id: string;
+  title: string;
+  content: string;
+  source: string;
+  sourcePath: string;
+};
+
+type ControlledKnowledgeAnswer = {
+  answer: string;
+  source: string;
+  sourcePath: string;
+  topic: string;
+  mode: "intent" | "rag" | "safe_fallback" | "legacy";
+  confidence: number;
+};
+
+const LEGACY_FAQS: Array<{ pattern: RegExp; answer: string; source: string; sourcePath: string }> = [
   {
     pattern: /valor|preco|cotacao/i,
     answer:
-      "O valor final depende da analise da seguradora e do seu perfil de risco. Posso te ajudar a coletar os dados obrigatorios para uma cotacao assertiva.",
+      "O valor final depende da análise da seguradora e do seu perfil de risco. Posso te ajudar a coletar os dados obrigatórios para uma cotação assertiva.",
+    source: "FAQ legada do backend",
+    sourcePath: "server.ts",
   },
   {
     pattern: /viajar|viagem/i,
     answer:
-      "A cobertura em viagem depende das clausulas da apolice e da abrangencia contratada. A confirmacao final vem na proposta da seguradora.",
+      "A cobertura em viagem depende das cláusulas da apólice e da abrangência contratada. A confirmação final vem na proposta da seguradora.",
+    source: "FAQ legada do backend",
+    sourcePath: "server.ts",
   },
   {
     pattern: /vigencia|inicio|termino/i,
     answer:
-      "A vigencia costuma ser anual, com data de inicio e termino definida em apolice. Posso orientar no processo, mas a confirmacao final e da seguradora.",
+      "A vigência costuma ser anual, com data de início e término definida em apólice. Posso orientar no processo, mas a confirmação final é da seguradora.",
+    source: "FAQ legada do backend",
+    sourcePath: "server.ts",
   },
   {
-    pattern: /uber|99|app/i,
+    pattern: /\b(uber|99)\b|aplicativo de transporte|app de transporte|motorista de app/i,
     answer:
-      "Existe seguro para uso em app, mas a aceitação e precificacao variam por seguradora e perfil. Vou considerar isso no seu encaminhamento.",
+      "Existe seguro para uso em app, mas a aceitação e precificação variam por seguradora e perfil. Vou considerar isso no seu encaminhamento.",
+    source: "FAQ legada do backend",
+    sourcePath: "server.ts",
   },
   {
     pattern: /assistencia 24|24h/i,
     answer:
-      "Sim, existem opcoes focadas em assistencia 24h. A disponibilidade depende da seguradora e plano contratado.",
+      "Sim, existem opções focadas em assistência 24h. A disponibilidade depende da seguradora e plano contratado.",
+    source: "FAQ legada do backend",
+    sourcePath: "server.ts",
   },
 ];
+
+const KNOWLEDGE_DIR = path.join(process.cwd(), "knowledge");
+const FAQ_INTENTS_PATH = path.join(KNOWLEDGE_DIR, "intencoes-faq-seguro-auto.jsonl");
+const FAQ_MARKDOWN_PATH = path.join(KNOWLEDGE_DIR, "faq-seguro-auto.md");
+const RAG_BASE_PATH = path.join(KNOWLEDGE_DIR, "base-rag-seguro-auto.md");
+
+const SAFE_KNOWLEDGE_FALLBACK =
+  "Não tenho uma fonte confiável suficiente nesta base para cravar essa resposta. O caminho seguro é verificar a apólice, a proposta ou falar com a seguradora/corretor. Posso seguir com a triagem e direcionar seu caso para análise humana.";
+
+const FRAUD_PREVENTION_ANSWER =
+  "Não oriento omissão ou alteração de informação para reduzir preço. Dados incorretos no perfil, como CEP, uso do veículo ou condutor principal, podem prejudicar a aceitação da proposta e o direito à indenização. O caminho seguro é informar os dados reais para análise da seguradora.";
+
+function loadKnowledgeIntents(): KnowledgeIntent[] {
+  if (!fs.existsSync(FAQ_INTENTS_PATH)) {
+    return [];
+  }
+
+  return fs
+    .readFileSync(FAQ_INTENTS_PATH, "utf-8")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line) => {
+      try {
+        const parsed = JSON.parse(line) as KnowledgeIntent;
+        if (!parsed.intent || !parsed.resposta_curta) {
+          return [];
+        }
+        return [{
+          intent: parsed.intent,
+          perguntas: Array.isArray(parsed.perguntas) ? parsed.perguntas : [],
+          resposta_curta: parsed.resposta_curta,
+          fonte: parsed.fonte || "Base FAQ controlada",
+          url: parsed.url || "knowledge/intencoes-faq-seguro-auto.jsonl",
+          tags: Array.isArray(parsed.tags) ? parsed.tags : [],
+        }];
+      } catch {
+        return [];
+      }
+    });
+}
+
+function loadMarkdownChunks(filePath: string, sourcePath: string): KnowledgeChunk[] {
+  if (!fs.existsSync(filePath)) {
+    return [];
+  }
+
+  const raw = fs.readFileSync(filePath, "utf-8");
+  const blocks = raw.split(/\n##\s+/).slice(1);
+  return blocks.flatMap((block, index) => {
+    const [rawTitle, ...contentLines] = block.split(/\r?\n/);
+    const title = rawTitle?.trim().replace(/^#+\s*/, "") || `Bloco ${index + 1}`;
+    const content = contentLines.join("\n").trim();
+    if (!content) {
+      return [];
+    }
+    const sourceMatch = content.match(/Fonte:\s*([^\n]+)/i);
+    return [{
+      id: `${sourcePath}-${index + 1}`,
+      title,
+      content,
+      source: sourceMatch?.[1]?.trim() || sourcePath,
+      sourcePath,
+    }];
+  });
+}
+
+const KNOWLEDGE_INTENTS = loadKnowledgeIntents();
+const KNOWLEDGE_CHUNKS = [
+  ...loadMarkdownChunks(RAG_BASE_PATH, "knowledge/base-rag-seguro-auto.md"),
+  ...loadMarkdownChunks(FAQ_MARKDOWN_PATH, "knowledge/faq-seguro-auto.md"),
+];
+
+function extractKnowledgeChunkAnswer(chunk: KnowledgeChunk) {
+  const safeAnswerMatch = chunk.content.match(/Resposta segura do chatbot:\s*\n+\s*>\s*([^\n]+)/i);
+  if (safeAnswerMatch?.[1]) {
+    return safeAnswerMatch[1].trim();
+  }
+
+  return chunk.content
+    .split(/\n\n+/)
+    .find((part) => !/^Fonte:/i.test(part.trim()))
+    ?.replace(/\s+/g, " ")
+    .trim();
+}
+
+function detectRiskyAdviceRequest(message: string): ControlledKnowledgeAnswer | null {
+  if (/mentir|omitir|esconder|fraudar|fraude|informar.*cep.*diferente|cep.*pagar menos/i.test(message)) {
+    return {
+      answer: FRAUD_PREVENTION_ANSWER,
+      source: "knowledge/base-rag-seguro-auto.md - Bloco 4",
+      sourcePath: "knowledge/base-rag-seguro-auto.md",
+      topic: "informacoes_corretas",
+      mode: "safe_fallback",
+      confidence: 1,
+    };
+  }
+  return null;
+}
+
+function isInsuranceKnowledgeQuestion(message: string) {
+  return /seguro|ap[oó]lice|cobertura|cobre|franquia|sinistro|indeniza|indeniza[cç][aã]o|seguradora|corretor|guincho|assist[eê]ncia|parcela|pagamento|terceiro|terceiros|b[oô]nus|renova[cç][aã]o|vidro|carro reserva|recusar|proposta|pre[cç]o|cot[aç][aã]o|perfil|cep|uber|99|aplicativo|rcf-v|rcf|susep|cartilha|danos/i.test(
+    message,
+  );
+}
+
+function formatControlledAnswer(answer: ControlledKnowledgeAnswer) {
+  if (answer.mode === "safe_fallback") {
+    return answer.answer;
+  }
+
+  return [
+    answer.answer,
+    "Orientação informativa: cobertura, aceitação, preço e indenização dependem da análise da seguradora e das condições da apólice.",
+  ].join("\n\n");
+}
+
+function cosineSimilarity(a: number[], b: number[]) {
+  let dotProduct = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dotProduct += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+class SimpleMemoryVectorStore {
+  documents: { pageContent: string; metadata: any; embedding: number[] }[] = [];
+  
+  constructor(private embeddings: GoogleGenerativeAIEmbeddings) {}
+
+  async addDocuments(docs: Document[]) {
+    // Process in batches to avoid rate limits
+    const batchSize = 20;
+    for (let i = 0; i < docs.length; i += batchSize) {
+      const batch = docs.slice(i, i + batchSize);
+      const texts = batch.map(d => d.pageContent);
+      const vectors = await this.embeddings.embedDocuments(texts);
+      for (let j = 0; j < batch.length; j++) {
+        this.documents.push({
+          pageContent: batch[j].pageContent,
+          metadata: batch[j].metadata,
+          embedding: vectors[j],
+        });
+      }
+    }
+  }
+
+  async similaritySearch(query: string, k: number = 1) {
+    const queryVector = await this.embeddings.embedQuery(query);
+    const scored = this.documents.map(doc => ({
+      ...doc,
+      score: cosineSimilarity(queryVector, doc.embedding),
+    }));
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, k);
+  }
+}
+
+let vectorStore: SimpleMemoryVectorStore | null = null;
+
+async function initVectorStore() {
+  if (!geminiApiKey) {
+    console.warn("Chave do Gemini não encontrada, RAG não será inicializado.");
+    return;
+  }
+
+  const embeddings = new GoogleGenerativeAIEmbeddings({
+    apiKey: geminiApiKey,
+    model: "gemini-embedding-2",
+  });
+
+  vectorStore = new SimpleMemoryVectorStore(embeddings);
+
+  const docs: Document[] = [];
+
+  for (const intent of KNOWLEDGE_INTENTS) {
+    for (const q of intent.perguntas) {
+      docs.push(new Document({
+        pageContent: q,
+        metadata: {
+          topic: intent.intent,
+          source: intent.fonte,
+          sourcePath: intent.url,
+          answer: intent.resposta_curta,
+          mode: "intent"
+        }
+      }));
+    }
+  }
+
+  const textSplitter = new RecursiveCharacterTextSplitter({
+    chunkSize: 1000,
+    chunkOverlap: 200,
+  });
+
+  for (const chunk of KNOWLEDGE_CHUNKS) {
+    const splitDocs = await textSplitter.createDocuments([`${chunk.title}\n${chunk.content}`]);
+    for (const doc of splitDocs) {
+      docs.push(new Document({
+        pageContent: doc.pageContent,
+        metadata: {
+          topic: chunk.title,
+          source: chunk.source,
+          sourcePath: chunk.sourcePath,
+          answer: extractKnowledgeChunkAnswer(chunk) || doc.pageContent.slice(0, 520),
+          mode: "rag"
+        }
+      }));
+    }
+  }
+
+  for (const faq of LEGACY_FAQS) {
+    docs.push(new Document({
+      pageContent: faq.answer,
+      metadata: {
+        topic: "faq_legada",
+        source: faq.source,
+        sourcePath: faq.sourcePath,
+        answer: faq.answer,
+        mode: "legacy"
+      }
+    }));
+  }
+
+  if (docs.length > 0) {
+    await vectorStore.addDocuments(docs);
+    console.log(`Vector Store inicializado com ${docs.length} documentos.`);
+  }
+}
+
+async function detectControlledKnowledgeAnswer(message: string): Promise<ControlledKnowledgeAnswer | null> {
+  const riskyAdvice = detectRiskyAdviceRequest(message);
+  if (riskyAdvice) {
+    return riskyAdvice;
+  }
+
+  if (!vectorStore) {
+    if (isInsuranceKnowledgeQuestion(message)) {
+      return {
+        answer: SAFE_KNOWLEDGE_FALLBACK,
+        source: "Fallback seguro sem fonte suficiente",
+        sourcePath: "knowledge/",
+        topic: "fallback_seguro",
+        mode: "safe_fallback",
+        confidence: 0,
+      };
+    }
+    return null;
+  }
+
+  const results = await vectorStore.similaritySearch(message, 1);
+  if (results.length > 0 && isInsuranceKnowledgeQuestion(message)) {
+    const best = results[0];
+    let finalAnswer = best.metadata.answer;
+
+    if (llm) {
+      try {
+        const prompt = `Você é a Lia, uma assistente virtual de seguros auto amigável e profissional.
+Sua tarefa é REESCREVER a resposta técnica abaixo de forma conversacional, humana e empática.
+Mantenha estritamente os fatos. 
+
+[REGRAS DE SEGURANÇA E ANTI-ALUCINAÇÃO]:
+1. NUNCA invente coberturas, garantias ou condições que não estejam no texto original.
+2. NUNCA informe preços, valores ou cotação final.
+3. NUNCA prometa aprovação da seguradora.
+4. NUNCA dê aconselhamento jurídico.
+5. Mantenha o foco absoluto em seguro auto. Se o texto não tiver a resposta completa, não invente o resto.
+
+Pergunta do usuário: "${message}"
+Resposta técnica original: "${best.metadata.answer}"
+
+Sua reescrita amigável e segura (Português do Brasil):`;
+        
+        const rewriteRes = await llm.invoke(prompt);
+        if (rewriteRes && rewriteRes.content) {
+          finalAnswer = rewriteRes.content.toString().trim();
+        }
+      } catch (error) {
+        console.error("Erro ao reescrever resposta via LLM:", error);
+      }
+    }
+
+    return {
+      answer: finalAnswer,
+      source: best.metadata.source,
+      sourcePath: best.metadata.sourcePath,
+      topic: best.metadata.topic,
+      mode: best.metadata.mode as any,
+      confidence: 5,
+    };
+  }
+
+  if (isInsuranceKnowledgeQuestion(message)) {
+    return {
+      answer: SAFE_KNOWLEDGE_FALLBACK,
+      source: "Fallback seguro sem fonte suficiente",
+      sourcePath: "knowledge/",
+      topic: "fallback_seguro",
+      mode: "safe_fallback",
+      confidence: 0,
+    };
+  }
+
+  return null;
+}
 
 type PythonReplyPayload = {
   agentStyle: string;
@@ -173,6 +532,99 @@ type PythonReplyPayload = {
 };
 
 const PYTHON_TIMEOUT_MS = 6_000;
+const chatRateLimitHits = new Map<string, { count: number; resetAt: number }>();
+
+function createAccessToken() {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+function adminApiKey() {
+  return process.env.ADMIN_API_KEY?.trim() || "";
+}
+
+function isAdminRequest(req: express.Request) {
+  const configuredKey = adminApiKey();
+  const receivedKey = req.header("x-admin-api-key")?.trim() || "";
+  if (!configuredKey || !receivedKey || configuredKey.length !== receivedKey.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(
+    Buffer.from(receivedKey),
+    Buffer.from(configuredKey),
+  );
+}
+
+function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const configuredKey = adminApiKey();
+  if (!configuredKey) {
+    res.status(503).json({ error: "ADMIN_API_KEY nao configurada no backend." });
+    return;
+  }
+
+  const receivedKey = req.header("x-admin-api-key")?.trim() || "";
+  if (!receivedKey || !isAdminRequest(req)) {
+    res.status(401).json({ error: "Acesso administrativo nao autorizado." });
+    return;
+  }
+
+  next();
+}
+
+function chatRateLimit(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const windowMs = Number(process.env.CHAT_RATE_LIMIT_WINDOW_MS || 60_000);
+  const maxHits = Number(process.env.CHAT_RATE_LIMIT_MAX || 30);
+  const now = Date.now();
+  const key = req.ip || req.socket.remoteAddress || "unknown";
+  const current = chatRateLimitHits.get(key);
+
+  if (!current || current.resetAt <= now) {
+    chatRateLimitHits.set(key, { count: 1, resetAt: now + windowMs });
+    next();
+    return;
+  }
+
+  if (current.count >= maxHits) {
+    res.status(429).json({ error: "Muitas mensagens em pouco tempo. Tente novamente em instantes." });
+    return;
+  }
+
+  current.count += 1;
+  next();
+}
+
+function maskCpfCnpj(value: string | null) {
+  if (!value) return "-";
+  const digits = value.replace(/\D/g, "");
+  if (digits.length === 11) {
+    return `${digits.slice(0, 3)}.***.***-${digits.slice(-2)}`;
+  }
+  if (digits.length === 14) {
+    return `${digits.slice(0, 2)}.***.***/****-${digits.slice(-2)}`;
+  }
+  return "***";
+}
+
+function maskPlate(value: string | null) {
+  if (!value) return "-";
+  const clean = value.replace(/[^A-Z0-9]/gi, "").toUpperCase();
+  if (clean.length < 4) return "***";
+  return `${clean.slice(0, 3)}***${clean.slice(-1)}`;
+}
+
+function maskEmail(value: string | null) {
+  if (!value) return "-";
+  const [name, domain] = value.split("@");
+  if (!name || !domain) return "***";
+  return `${name.slice(0, 2)}***@${domain}`;
+}
+
+function maskSensitiveText(value: string) {
+  return value
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, (email) => maskEmail(email))
+    .replace(/\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/g, (cpf) => maskCpfCnpj(cpf))
+    .replace(/\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b/g, (cnpj) => maskCpfCnpj(cnpj))
+    .replace(/\b[A-Z]{3}-?\d[A-Z0-9]\d{2}\b/gi, (plate) => maskPlate(plate));
+}
 
 function runPythonCommunicator(payload: PythonReplyPayload): Promise<string | null> {
   return new Promise((resolve) => {
@@ -246,6 +698,7 @@ async function buildAssistantText(params: {
   protocol: string;
   isRouted: boolean;
   includeIntro: boolean;
+  fullName?: string | null;
 }) {
   const missingLabel = params.missing.map((field) => FIELD_LABELS[String(field)]).join(", ");
 
@@ -264,6 +717,7 @@ async function buildAssistantText(params: {
     protocol: params.protocol,
     isRouted: params.isRouted,
     includeIntro: params.includeIntro,
+    fullName: params.fullName,
   });
 
   if (pythonText) {
@@ -333,7 +787,7 @@ const geminiApiKey = readGeminiApiKey();
 const llm = geminiApiKey
   ? new ChatGoogleGenerativeAI({
       apiKey: geminiApiKey,
-      model: process.env.GEMINI_MODEL || "gemini-1.5-pro",
+      model: process.env.GEMINI_MODEL || "gemini-2.5-flash",
       temperature: 0.1,
     })
   : null;
@@ -399,6 +853,7 @@ async function initDb() {
       id SERIAL PRIMARY KEY,
       lead_id INTEGER NOT NULL REFERENCES leads(id),
       channel VARCHAR(40) NOT NULL DEFAULT 'web',
+      access_token VARCHAR(128),
       started_at TIMESTAMP NOT NULL DEFAULT NOW(),
       ended_at TIMESTAMP
     );
@@ -420,6 +875,26 @@ async function initDb() {
       provider_id VARCHAR(180),
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS knowledge_answer_logs (
+      id SERIAL PRIMARY KEY,
+      conversation_id INTEGER NOT NULL REFERENCES conversations(id),
+      lead_id INTEGER NOT NULL REFERENCES leads(id),
+      topic VARCHAR(160) NOT NULL,
+      source_name TEXT NOT NULL,
+      source_path TEXT NOT NULL,
+      answer_mode VARCHAR(40) NOT NULL,
+      confidence NUMERIC,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    ALTER TABLE conversations
+    ADD COLUMN IF NOT EXISTS access_token VARCHAR(128);
+
+    CREATE INDEX IF NOT EXISTS idx_conversations_access_token
+    ON conversations (access_token);
   `);
 
   const defaultAgents: Array<Omit<Agent, "id">> = [
@@ -502,23 +977,33 @@ async function createLeadAndConversation() {
   );
 
   const lead = createdLead.rows[0];
+  const accessToken = createAccessToken();
   const createdConversation = await pool.query(
     `
-    INSERT INTO conversations (lead_id, channel)
-    VALUES ($1, 'web')
-    RETURNING id
+    INSERT INTO conversations (lead_id, channel, access_token)
+    VALUES ($1, 'web', $2)
+    RETURNING id, access_token
     `,
-    [lead.id],
+    [lead.id, accessToken],
   );
 
   return {
     lead,
     conversationId: createdConversation.rows[0].id as number,
+    conversationToken: createdConversation.rows[0].access_token as string,
   };
 }
 
 async function getLeadById(leadId: number) {
   const result = await pool.query<Lead>(`SELECT * FROM leads WHERE id = $1`, [leadId]);
+  return result.rows[0] || null;
+}
+
+async function getConversationById(conversationId: number) {
+  const result = await pool.query<Conversation>(
+    `SELECT * FROM conversations WHERE id = $1`,
+    [conversationId],
+  );
   return result.rows[0] || null;
 }
 
@@ -533,6 +1018,36 @@ async function insertConversationMessage(
     VALUES ($1, $2, $3)
     `,
     [conversationId, role, content],
+  );
+}
+
+async function insertKnowledgeAnswerLog(
+  conversationId: number,
+  leadId: number,
+  answer: ControlledKnowledgeAnswer,
+) {
+  await pool.query(
+    `
+    INSERT INTO knowledge_answer_logs (
+      conversation_id,
+      lead_id,
+      topic,
+      source_name,
+      source_path,
+      answer_mode,
+      confidence
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `,
+    [
+      conversationId,
+      leadId,
+      answer.topic,
+      answer.source,
+      answer.sourcePath,
+      answer.mode,
+      answer.confidence,
+    ],
   );
 }
 
@@ -551,8 +1066,8 @@ const BOOLEAN_FIELDS: Array<keyof Lead> = [
 const DIRECT_ANSWER_FIELDS: Partial<Record<keyof Lead, (msg: string) => string | null>> = {
   full_name: (msg) => {
     const t = msg.trim();
-    // Looks like a name: 2–5 words, letters + accents + hyphens only, reasonable length.
-    if (/^[A-Za-zÀ-ÖØ-öø-ÿ'-]+(?: [A-Za-zÀ-ÖØ-öø-ÿ'-]+){1,4}$/.test(t) && t.length >= 4 && t.length <= 80) {
+    // Aceita 1 a 5 palavras como nome.
+    if (/^[A-Za-zÀ-ÖØ-öø-ÿ'-]+(?: [A-Za-zÀ-ÖØ-öø-ÿ'-]+){0,4}$/.test(t) && t.length >= 2 && t.length <= 80) {
       return t;
     }
     return null;
@@ -564,9 +1079,11 @@ const DIRECT_ANSWER_FIELDS: Partial<Record<keyof Lead, (msg: string) => string |
   },
   birth_date: (msg) => {
     const t = msg.trim();
-    // dd/mm/yyyy, dd-mm-yyyy, yyyy-mm-dd, or written month
+    // dd/mm/yyyy, dd-mm-yyyy, yyyy-mm-dd
     if (/\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b/.test(t)) return t;
     if (/\b\d{4}[\/\-]\d{2}[\/\-]\d{2}\b/.test(t)) return t;
+    // Data por extenso (ex: 13 de julho de 1976)
+    if (/\b\d{1,2}\s+(de\s+)?[a-zç]+\s+(de\s+)?\d{4}\b/i.test(t)) return t;
     return null;
   },
   marital_status: (msg) => {
@@ -582,6 +1099,26 @@ const DIRECT_ANSWER_FIELDS: Partial<Record<keyof Lead, (msg: string) => string |
     for (const [key, val] of Object.entries(map)) {
       if (t.includes(key)) return val;
     }
+    return null;
+  },
+  residence_type: (msg) => {
+    const t = msg.trim().toLowerCase();
+    if (/\bcasa\b/.test(t)) return "Casa";
+    if (/apartamento|\bapto\b|\bap\b/.test(t)) return "Apartamento";
+    return null;
+  },
+  third_party_coverage_value: (msg) => {
+    const t = msg.trim();
+    const money = t.match(/r\$\s*[\d.,]+(?:\s*mil)?|[\d.,]+\s*(?:mil|k)\b/i);
+    if (money) return money[0].trim();
+    if (/100/.test(t) && /150/.test(t)) return "R$ 100.000 a R$ 150.000";
+    if (/nao sei|não sei|sugest|recomend/i.test(t)) return "A definir com orientação de R$ 100.000 a R$ 150.000";
+    return null;
+  },
+  fleet_complexity: (msg) => {
+    const t = msg.trim().toLowerCase();
+    if (/m[eé]dia|alta|complex/.test(t)) return "media_ou_alta";
+    if (/leve|simples|pequena|poucos/.test(t)) return "leve";
     return null;
   },
   cpf_cnpj: (msg) => {
@@ -682,10 +1219,10 @@ function fallbackExtraction(message: string, lastAskedField?: keyof Lead): Extra
     extracted.email = emailMatch[0];
   }
 
-  if (/uber|99|app/.test(lowerMessage)) {
+  if (/\b(uber|99)\b|aplicativo de transporte|app de transporte|motorista de app/.test(lowerMessage)) {
     extracted.app_usage = true;
   }
-  if (/nao uso app|não uso app|nao trabalho com app/.test(lowerMessage)) {
+  if (/nao uso app|não uso app|nao trabalho com app|não trabalho com app|uso pessoal|nao uso para aplicativo|não uso para aplicativo/.test(lowerMessage)) {
     extracted.app_usage = false;
   }
 
@@ -730,6 +1267,11 @@ async function extractLeadData(
   currentLead: Lead,
   lastAskedField?: keyof Lead,
 ): Promise<ExtractedLeadData> {
+  const t = message.trim();
+  if (/^(tirar d[uú]vida|fazer cota[cç][aã]o|sinistro ou assist[eê]ncia)$/i.test(t)) {
+    return {};
+  }
+
   const fallback = fallbackExtraction(message, lastAskedField);
   if (!llm || canSkipLlm(message, lastAskedField)) {
     return fallback;
@@ -776,7 +1318,7 @@ Mensagem do cliente:
 {message}
 `);
 
-  const LLM_TIMEOUT_MS = 8_000;
+  const LLM_TIMEOUT_MS = 15_000;
   try {
     const messages = await prompt.formatMessages({
       currentLead: JSON.stringify(currentLead),
@@ -908,15 +1450,60 @@ async function updateLead(lead: Lead, data: ExtractedLeadData) {
   return result.rows[0];
 }
 
+function requiredFieldsForLead(lead: Lead): Array<keyof Lead> {
+  const isPJ = lead.person_type === "PJ" || lead.segment === "PJ";
+
+  const fields: Array<keyof Lead> = [
+    "full_name",
+    "person_type",
+    "renewal",
+  ];
+
+  if (!isPJ) {
+    fields.push("birth_date", "marital_status");
+  }
+
+  fields.push(
+    "cpf_cnpj",
+    "cep",
+    "vehicle_model",
+    "vehicle_year",
+    "plate",
+  );
+
+  if (isPJ) {
+    fields.push("fleet_complexity", "special_condition");
+  }
+
+  fields.push(
+    "has_home_garage",
+    "residence_type",
+    "work_commute_usage",
+  );
+
+  if (lead.work_commute_usage === true) {
+    fields.push("work_garage");
+  }
+
+  fields.push(
+    "app_usage",
+    "has_young_driver",
+    "third_party_coverage_value",
+    "email",
+  );
+
+  return fields;
+}
+
 function missingRequiredFields(lead: Lead) {
-  return REQUIRED_FIELDS.filter((field) => {
+  return requiredFieldsForLead(lead).filter((field) => {
     const value = lead[field];
     return value === null || value === undefined || value === "";
   });
 }
 
 function hasAnyRequiredFieldFilled(lead: Lead) {
-  return REQUIRED_FIELDS.some((field) => {
+  return requiredFieldsForLead(lead).some((field) => {
     const value = lead[field];
     return value !== null && value !== undefined && value !== "";
   });
@@ -954,15 +1541,18 @@ async function buildContextSnippet(conversationId: number) {
 }
 
 function shouldStartDataCollection(message: string, userMessageCount: number, lead: Lead) {
-  if (hasAnyRequiredFieldFilled(lead)) {
+  // Se clicou em "Tirar dúvida", atrasamos a coleta para ele fazer a pergunta.
+  if (/tirar d[úu]vida/i.test(message)) return false;
+
+  // Se já tiver preenchido algum campo, deve continuar coletando.
+  if (hasAnyRequiredFieldFilled(lead)) return true;
+
+  // Se já conversou 2 vezes ou pediu cotação direta, vamos coletar.
+  if (userMessageCount > 1 || /cotar|cotacao|cotação|simular|proposta|contratar|fechar|orcamento|orçamento/i.test(message)) {
     return true;
   }
-
-  if (/cotar|cotacao|cotação|simular|proposta|contratar|fechar|orcamento|orçamento/i.test(message)) {
-    return true;
-  }
-
-  return false;
+  
+  return true;
 }
 
 function isClearlyOffTopic(message: string) {
@@ -972,18 +1562,13 @@ function isClearlyOffTopic(message: string) {
 }
 
 function isSinistroIntent(message: string) {
-  return /sinistro|bati|bateram|colis[aã]o|roubo|furt[o]?|acidente|perda total|guincho urgente/i.test(
+  if (/seguradora|cobre|cobertura|pagar|indeniza|indeniza[cç][aã]o|ap[oó]lice|franquia|qualquer/i.test(message)) {
+    return false;
+  }
+
+  return /sinistro|bati|bateram|colis[aã]o|roubo|furt[o]?|furtaram|roubaram|acidente|perda total|guincho urgente|capotei|ferid[oa]|v[ií]tima|socorro/i.test(
     message,
   );
-}
-
-function detectFaqResponse(message: string) {
-  for (const faq of FAQS) {
-    if (faq.pattern.test(message)) {
-      return faq.answer;
-    }
-  }
-  return null;
 }
 
 function nextQuestionForLead(lead: Lead) {
@@ -1001,6 +1586,14 @@ async function getAgentByCode(code: AgentCode) {
   const result = await pool.query<Agent>(
     `SELECT * FROM agents WHERE code = $1 AND active = true LIMIT 1`,
     [code],
+  );
+  return result.rows[0] || null;
+}
+
+async function getAgentById(id: number) {
+  const result = await pool.query<Agent>(
+    `SELECT * FROM agents WHERE id = $1 LIMIT 1`,
+    [id],
   );
   return result.rows[0] || null;
 }
@@ -1088,7 +1681,7 @@ async function buildConversationSummary(conversationId: number) {
     [conversationId],
   );
   const messages = result.rows.slice(-12);
-  return messages.map((m) => `${m.role}: ${m.content}`).join("\n");
+  return maskSensitiveText(messages.map((m) => `${m.role}: ${m.content}`).join("\n"));
 }
 
 async function buildConversationTranscript(conversationId: number) {
@@ -1108,12 +1701,17 @@ async function buildConversationTranscript(conversationId: number) {
 }
 
 function smtpConfigured() {
+  const host = process.env.SMTP_HOST?.trim();
+  if (!host || host === "smtp.example.com") {
+    return false;
+  }
+
   return Boolean(
-    process.env.SMTP_HOST &&
-      process.env.SMTP_PORT &&
-      process.env.SMTP_USER &&
-      process.env.SMTP_PASS &&
-      process.env.SMTP_FROM,
+    host &&
+      process.env.SMTP_PORT?.trim() &&
+      process.env.SMTP_USER?.trim() &&
+      process.env.SMTP_PASS?.trim() &&
+      process.env.SMTP_FROM?.trim(),
   );
 }
 
@@ -1139,12 +1737,13 @@ async function sendRoutingEmails(
 
   const baseChecklist = [
     `Nome: ${lead.full_name ?? "-"}`,
-    `CPF/CNPJ: ${lead.cpf_cnpj ?? "-"}`,
+    `CPF/CNPJ: ${maskCpfCnpj(lead.cpf_cnpj)}`,
     `Nascimento: ${lead.birth_date ?? "-"}`,
     `CEP: ${lead.cep ?? "-"}`,
     `Veiculo: ${lead.vehicle_model ?? "-"}`,
     `Ano: ${lead.vehicle_year ?? "-"}`,
-    `Placa: ${lead.plate ?? "-"}`,
+    `Placa: ${maskPlate(lead.plate)}`,
+    `Email: ${maskEmail(lead.email)}`,
     `Renovacao: ${lead.renewal === null ? "-" : lead.renewal ? "Sim" : "Nao"}`,
     `Uso app: ${lead.app_usage === null ? "-" : lead.app_usage ? "Sim" : "Nao"}`,
     `Condutor 18-25: ${
@@ -1219,12 +1818,26 @@ async function sendRoutingEmails(
 
 async function startServer() {
   await initDb();
+  await initVectorStore();
 
   const app = express();
   const PORT = Number(process.env.PORT || 3000);
+  const corsOrigins = (process.env.CORS_ORIGIN || "http://localhost:8080")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
 
-  app.use(cors());
+  app.use(cors({
+    origin(origin, callback) {
+      if (!origin || corsOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(null, false);
+    },
+  }));
   app.use(express.json());
+  app.use("/api/chat", chatRateLimit);
 
   app.get("/api/health", async (_req, res) => {
     const dbOk = await pool
@@ -1238,12 +1851,12 @@ async function startServer() {
     });
   });
 
-  app.get("/api/agents", async (_req, res) => {
+  app.get("/api/agents", requireAdmin, async (_req, res) => {
     const result = await pool.query<Agent>(`SELECT * FROM agents ORDER BY code ASC`);
     res.json(result.rows);
   });
 
-  app.post("/api/agents", async (req, res) => {
+  app.post("/api/agents", requireAdmin, async (req, res) => {
     const { code, name, email, segment, flowType, active } = req.body;
     if (!code || !name || !email || !segment || !flowType) {
       res.status(400).json({ error: "Campos obrigatorios: code, name, email, segment, flowType." });
@@ -1270,7 +1883,7 @@ async function startServer() {
     }
   });
 
-  app.put("/api/agents/:id", async (req, res) => {
+  app.put("/api/agents/:id", requireAdmin, async (req, res) => {
     const id = Number(req.params.id);
     const { name, email, segment, flowType, active } = req.body;
     if (!id) {
@@ -1293,7 +1906,7 @@ async function startServer() {
     res.json(result.rows[0]);
   });
 
-  app.patch("/api/agents/:id/active", async (req, res) => {
+  app.patch("/api/agents/:id/active", requireAdmin, async (req, res) => {
     const id = Number(req.params.id);
     const { active } = req.body;
     const result = await pool.query<Agent>(
@@ -1312,12 +1925,46 @@ async function startServer() {
     res.json(result.rows[0]);
   });
 
+  app.get("/api/conversations/:id/messages", async (req, res) => {
+    const conversationId = Number(req.params.id);
+    const token = String(req.query.token || "");
+    if (!conversationId || !token) {
+      res.status(401).json({ error: "Token da conversa obrigatorio." });
+      return;
+    }
+
+    const conversation = await getConversationById(conversationId);
+    if (!conversation?.access_token || conversation.access_token !== token) {
+      res.status(403).json({ error: "Historico nao autorizado." });
+      return;
+    }
+
+    const result = await pool.query<{ role: "user" | "assistant" | "system"; content: string; created_at: string }>(
+      `
+      SELECT role, content, created_at
+      FROM conversation_messages
+      WHERE conversation_id = $1
+      ORDER BY id ASC
+      `,
+      [conversationId],
+    );
+
+    res.json({
+      conversationId,
+      messages: result.rows.map((message) => ({
+        ...message,
+        content: maskSensitiveText(message.content),
+      })),
+    });
+  });
+
   app.post("/api/chat", async (req, res) => {
     try {
-      const { message, leadId, conversationId } = req.body as {
+      const { message, leadId, conversationId, conversationToken } = req.body as {
         message: string;
         leadId?: number;
         conversationId?: number;
+        conversationToken?: string;
       };
 
       if (!message || !message.trim()) {
@@ -1327,13 +1974,25 @@ async function startServer() {
 
       let currentLead: Lead | null = null;
       let currentConversationId = conversationId;
+      let currentConversationToken: string | null = null;
 
       if (!leadId || !conversationId) {
         const created = await createLeadAndConversation();
         currentLead = created.lead;
         currentConversationId = created.conversationId;
+        currentConversationToken = created.conversationToken;
       } else {
         currentLead = await getLeadById(leadId);
+        const conversation = await getConversationById(conversationId);
+        if (!conversation || conversation.lead_id !== leadId) {
+          res.status(403).json({ error: "Conversa nao pertence ao lead informado." });
+          return;
+        }
+        if (conversationToken && conversation.access_token && conversationToken !== conversation.access_token) {
+          res.status(403).json({ error: "Token da conversa invalido." });
+          return;
+        }
+        currentConversationToken = conversation.access_token;
       }
 
       if (!currentLead || !currentConversationId) {
@@ -1374,8 +2033,44 @@ async function startServer() {
           leadId: currentLead.id,
           conversationId: currentConversationId,
           protocol: currentLead.protocol,
+          conversationToken: currentConversationToken,
           status: "HUMAN_HANDOFF",
           assignedAgent: null,
+          missingFields: [],
+        });
+        return;
+      }
+
+      if (currentLead.status === "routed_to_agent" && currentLead.assigned_agent_id) {
+        const assignedAgent = await getAgentById(currentLead.assigned_agent_id);
+        const assigned = assignedAgent
+          ? `${assignedAgent.code} (${assignedAgent.name})`
+          : "equipe especializada";
+        const routedText = await buildAssistantText({
+          stage: "routed",
+          offTopic: false,
+          collectingTransition: false,
+          faqAnswer: null,
+          missing: [],
+          question: null,
+          contextSnippet: "",
+          assigned,
+          protocol: currentLead.protocol,
+          isRouted: true,
+          includeIntro: false,
+          fullName: currentLead.full_name,
+        });
+
+        await insertConversationMessage(currentConversationId, "assistant", routedText);
+
+        res.json({
+          text: routedText,
+          leadId: currentLead.id,
+          conversationId: currentConversationId,
+          protocol: currentLead.protocol,
+          conversationToken: currentConversationToken,
+          status: "ROUTED",
+          assignedAgent: assignedAgent?.code ?? null,
           missingFields: [],
         });
         return;
@@ -1451,7 +2146,9 @@ async function startServer() {
         }
       }
 
-      const faqAnswer = detectFaqResponse(message);
+      const knowledgeAnswer = offTopic ? null : await detectControlledKnowledgeAnswer(message);
+      const faqAnswer = knowledgeAnswer ? formatControlledAnswer(knowledgeAnswer) : null;
+      const safeContextSnippet = knowledgeAnswer ? "" : contextSnippet;
       const missing = missingRequiredFields(finalLead);
       const question = nextQuestionForLead(finalLead);
 
@@ -1467,11 +2164,12 @@ async function startServer() {
           faqAnswer,
           missing,
           question,
-          contextSnippet,
+          contextSnippet: safeContextSnippet,
           assigned,
           protocol: finalLead.protocol,
-          isRouted: true,
-          includeIntro: false,
+          isRouted: routedNow,
+          includeIntro: transitionedToCollecting,
+          fullName: finalLead.full_name,
         });
       } else {
         const stage = startDataCollection ? "collecting" : "listening";
@@ -1482,20 +2180,37 @@ async function startServer() {
           faqAnswer,
           missing,
           question: stage === "collecting" ? question : null,
-          contextSnippet,
+          contextSnippet: safeContextSnippet,
           assigned: null,
           protocol: finalLead.protocol,
           isRouted: false,
           includeIntro: false,
+          fullName: finalLead.full_name,
         });
       }
 
       await insertConversationMessage(currentConversationId, "assistant", assistantText);
+      if (knowledgeAnswer) {
+        await insertKnowledgeAnswerLog(currentConversationId, finalLead.id, knowledgeAnswer);
+      }
 
       if (routedNow) {
         const summary = await buildConversationSummary(currentConversationId);
         const transcript = await buildConversationTranscript(currentConversationId);
-        await sendRoutingEmails(finalLead, assignedAgent, summary, transcript);
+        try {
+          await sendRoutingEmails(finalLead, assignedAgent, summary, transcript);
+        } catch (emailError) {
+          console.error("Email delivery error:", emailError);
+          if (finalLead.email) {
+            await pool.query(
+              `
+              INSERT INTO email_logs (lead_id, recipient_email, template_name, status, provider_id)
+              VALUES ($1, $2, 'routing_notification', 'failed', NULL)
+              `,
+              [finalLead.id, finalLead.email],
+            );
+          }
+        }
       }
 
       res.json({
@@ -1503,9 +2218,18 @@ async function startServer() {
         leadId: finalLead.id,
         conversationId: currentConversationId,
         protocol: finalLead.protocol,
+        conversationToken: currentConversationToken,
         status: routing.status,
         assignedAgent: routing.assigned_agent,
         missingFields: missing.map((field) => FIELD_LABELS[String(field)]),
+        knowledgeSource: knowledgeAnswer
+          ? {
+              topic: knowledgeAnswer.topic,
+              source: knowledgeAnswer.source,
+              sourcePath: knowledgeAnswer.sourcePath,
+              mode: knowledgeAnswer.mode,
+            }
+          : null,
       });
     } catch (error) {
       console.error("Chat error:", error);
@@ -1514,6 +2238,7 @@ async function startServer() {
   });
 
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",

@@ -15,15 +15,27 @@ import {
   Info,
   Users,
   Save,
-  PlusCircle
+  PlusCircle,
+  RotateCcw
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { cn } from './lib/utils';
 import heroCarImage from './assets/images/hero_car_1779023796469.png';
+import logoImage from './assets/images/logo.png';
+import liaAvatar from './assets/images/lia_avatar.png';
+import userAvatar from './assets/images/user_avatar.png';
 
 interface Message {
   role: 'user' | 'assistant';
   content: string;
+}
+
+interface StoredChatSession {
+  messages: Message[];
+  leadId: number | null;
+  conversationId: number | null;
+  conversationToken: string | null;
+  protocol: string | null;
 }
 
 interface Agent {
@@ -37,23 +49,93 @@ interface Agent {
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
+const CHAT_STORAGE_KEY = 'seguroauto-ai-chat-session';
+const ADMIN_KEY_STORAGE_KEY = 'seguroauto-ai-admin-key';
+const INITIAL_ASSISTANT_MESSAGE = 'Olá! Eu sou a Lia, consultora virtual da SeguroAuto AI. Estou aqui para tornar o seu dia um pouco mais fácil e resolver tudo sobre o seu seguro.\n\nPara começarmos uma conversa melhor, como você gostaria que eu te chamasse?';
+
+const initialMessages = (): Message[] => [
+  { role: 'assistant', content: INITIAL_ASSISTANT_MESSAGE },
+];
+
+const loadStoredChatSession = (): StoredChatSession => {
+  if (typeof window === 'undefined') {
+    return { messages: initialMessages(), leadId: null, conversationId: null, conversationToken: null, protocol: null };
+  }
+
+  try {
+    const raw = window.localStorage.getItem(CHAT_STORAGE_KEY);
+    if (!raw) {
+      return { messages: initialMessages(), leadId: null, conversationId: null, conversationToken: null, protocol: null };
+    }
+
+    const parsed = JSON.parse(raw) as Partial<StoredChatSession>;
+    const messages = Array.isArray(parsed.messages) && parsed.messages.length
+      ? parsed.messages.filter((message): message is Message =>
+          (message?.role === 'user' || message?.role === 'assistant') &&
+          typeof message.content === 'string'
+        )
+      : initialMessages();
+
+    return {
+      messages: messages.length ? messages : initialMessages(),
+      leadId: typeof parsed.leadId === 'number' ? parsed.leadId : null,
+      conversationId: typeof parsed.conversationId === 'number' ? parsed.conversationId : null,
+      conversationToken: typeof parsed.conversationToken === 'string' ? parsed.conversationToken : null,
+      protocol: typeof parsed.protocol === 'string' ? parsed.protocol : null,
+    };
+  } catch {
+    return { messages: initialMessages(), leadId: null, conversationId: null, conversationToken: null, protocol: null };
+  }
+};
+
+const loadStoredAdminKey = () => {
+  if (typeof window === 'undefined') return '';
+  return window.localStorage.getItem(ADMIN_KEY_STORAGE_KEY) ?? '';
+};
+
+const splitAssistantText = (text: string) => text
+  .split(/\n+/)
+  .map((chunk) => chunk.trim())
+  .filter(Boolean);
+
+const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+const typingDelayFor = (text: string) => Math.min(1000, Math.max(350, text.length * 10));
+
+const inferQuickReplies = (text: string): string[] => {
+  if (/Pessoa F[ií]sica.*Pessoa Jur[ií]dica|PF.*PJ/i.test(text)) {
+    return ['PF', 'PJ'];
+  }
+  if (/sim ou n[aã]o|\(sim ou n[aã]o\)|\?$/.test(text) && /(renova|garagem|trabalho|app|condutor|condi[cç][aã]o especial)/i.test(text)) {
+    return ['Sim', 'Não'];
+  }
+  if (/principal d[uú]vida|seguro auto hoje|entender seu cen[aá]rio|como voc[eê] gostaria que eu te chamasse/i.test(text)) {
+    return ['Fazer cotação', 'Tirar dúvida', 'Sinistro ou assistência'];
+  }
+  return [];
+};
 
 export default function App() {
+  const [initialSession] = useState(loadStoredChatSession);
   const [activeView, setActiveView] = useState<'chat' | 'agents'>('chat');
-  const [messages, setMessages] = useState<Message[]>([
-    { role: 'assistant', content: 'Olá, seja muito bem-vindo(a)! Eu sou a Lia, consultora virtual da SeguroAuto AI. Quero te ouvir primeiro para entender seu cenário e te orientar da melhor forma. Me conta: qual sua principal dúvida sobre o seguro auto hoje?' }
-  ]);
+  const [messages, setMessages] = useState<Message[]>(initialSession.messages);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [showMobileChat, setShowMobileChat] = useState(false);
-  const [leadId, setLeadId] = useState<number | null>(null);
-  const [conversationId, setConversationId] = useState<number | null>(null);
-  const [protocol, setProtocol] = useState<string | null>(null);
+  const [leadId, setLeadId] = useState<number | null>(initialSession.leadId);
+  const [conversationId, setConversationId] = useState<number | null>(initialSession.conversationId);
+  const [conversationToken, setConversationToken] = useState<string | null>(initialSession.conversationToken);
+  const [protocol, setProtocol] = useState<string | null>(initialSession.protocol);
+  const [quickReplies, setQuickReplies] = useState<string[]>(() => {
+    const lastAssistant = [...initialSession.messages].reverse().find((message) => message.role === 'assistant');
+    return inferQuickReplies(lastAssistant?.content ?? INITIAL_ASSISTANT_MESSAGE);
+  });
 
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loadingAgents, setLoadingAgents] = useState(false);
   const [agentsError, setAgentsError] = useState<string | null>(null);
   const [agentsSuccess, setAgentsSuccess] = useState<string | null>(null);
+  const [adminApiKey, setAdminApiKey] = useState(loadStoredAdminKey);
   const [selectedSegment, setSelectedSegment] = useState<'PF' | 'PJ'>('PF');
   const [agentDraft, setAgentDraft] = useState({
     code: 'PF-1' as Agent['code'],
@@ -78,13 +160,35 @@ export default function App() {
     scrollToBottom();
   }, [messages, isTyping]);
 
+  useEffect(() => {
+    window.localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify({
+      messages,
+      leadId,
+      conversationId,
+      conversationToken,
+      protocol,
+      updatedAt: new Date().toISOString(),
+    }));
+  }, [messages, leadId, conversationId, conversationToken, protocol]);
+
+  useEffect(() => {
+    window.localStorage.setItem(ADMIN_KEY_STORAGE_KEY, adminApiKey);
+  }, [adminApiKey]);
+
+  const adminHeaders = () => ({
+    'Content-Type': 'application/json',
+    ...(adminApiKey.trim() ? { 'x-admin-api-key': adminApiKey.trim() } : {}),
+  });
+
   const loadAgents = async () => {
     setLoadingAgents(true);
     setAgentsError(null);
     try {
-      const response = await fetch(`${API_BASE}/api/agents`);
+      const response = await fetch(`${API_BASE}/api/agents`, {
+        headers: adminHeaders(),
+      });
       if (!response.ok) {
-        throw new Error('Nao foi possivel carregar os atendentes.');
+        throw new Error(response.status === 401 ? 'Chave administrativa inválida.' : 'Nao foi possivel carregar os atendentes.');
       }
       const data = await response.json();
       setAgents(data);
@@ -102,19 +206,30 @@ export default function App() {
     }
   }, [activeView]);
 
-  const handleSendMessage = async () => {
-    if (!input.trim()) return;
+  const appendAssistantText = async (text: string) => {
+    const chunks = splitAssistantText(text);
+    const safeChunks = chunks.length ? chunks : ['Desculpe, tive um problema técnico. Pode repetir?'];
+    for (const chunk of safeChunks) {
+      setIsTyping(true);
+      await wait(typingDelayFor(chunk));
+      setMessages(prev => [...prev, { role: 'assistant', content: chunk }]);
+    }
+  };
 
-    const userMessage = input.trim();
+  const sendMessage = async (userMessage: string) => {
+    const trimmed = userMessage.trim();
+    if (!trimmed || isTyping) return;
+
     setInput('');
-    setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
+    setQuickReplies([]);
+    setMessages(prev => [...prev, { role: 'user', content: trimmed }]);
     setIsTyping(true);
 
     try {
       const response = await fetch(`${API_BASE}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMessage, leadId, conversationId }),
+        body: JSON.stringify({ message: trimmed, leadId, conversationId, conversationToken }),
       });
 
       const data = await response.json();
@@ -124,20 +239,43 @@ export default function App() {
       if (data.conversationId) {
         setConversationId(data.conversationId);
       }
+      if (data.conversationToken) {
+        setConversationToken(data.conversationToken);
+      }
       if (data.protocol) {
         setProtocol(data.protocol);
       }
 
-      if (data.text) {
-        setMessages(prev => [...prev, { role: 'assistant', content: data.text }]);
-      } else {
-        setMessages(prev => [...prev, { role: 'assistant', content: 'Desculpe, tive um problema técnico. Pode repetir?' }]);
-      }
+      const assistantText = data.text || 'Desculpe, tive um problema técnico. Pode repetir?';
+      await appendAssistantText(assistantText);
+      setQuickReplies(inferQuickReplies(assistantText));
     } catch (error) {
-      setMessages(prev => [...prev, { role: 'assistant', content: 'Erro de conexão. Verifique sua internet.' }]);
+      const errorText = 'Erro de conexão. Verifique sua internet.';
+      await appendAssistantText(errorText);
+      setQuickReplies([]);
     } finally {
       setIsTyping(false);
     }
+  };
+
+  const handleSendMessage = () => {
+    void sendMessage(input);
+  };
+
+  const handleQuickReply = (reply: string) => {
+    void sendMessage(reply);
+  };
+
+  const resetChat = () => {
+    const messages = initialMessages();
+    setMessages(messages);
+    setLeadId(null);
+    setConversationId(null);
+    setConversationToken(null);
+    setProtocol(null);
+    setInput('');
+    setQuickReplies(inferQuickReplies(INITIAL_ASSISTANT_MESSAGE));
+    window.localStorage.removeItem(CHAT_STORAGE_KEY);
   };
 
   const handleCreateAgent = async () => {
@@ -158,7 +296,7 @@ export default function App() {
     try {
       const response = await fetch(endpoint, {
         method,
-        headers: { 'Content-Type': 'application/json' },
+        headers: adminHeaders(),
         body: JSON.stringify(agentDraft),
       });
 
@@ -186,7 +324,7 @@ export default function App() {
     try {
       await fetch(`${API_BASE}/api/agents/${agent.id}/active`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: adminHeaders(),
         body: JSON.stringify({ active: !agent.active }),
       });
       await loadAgents();
@@ -227,15 +365,15 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
+    <div className="min-h-screen bg-slate-900 flex flex-col font-sans">
       {/* Header */}
-      <header className="fixed top-0 w-full z-50 bg-white/80 backdrop-blur-md border-b border-slate-200">
+      <header className="fixed top-0 w-full z-50 bg-slate-900/80 backdrop-blur-md border-b border-slate-800">
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-10 h-10 bg-brand-primary rounded-xl flex items-center justify-center text-white shadow-lg">
-              <ShieldCheck size={24} />
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center overflow-hidden">
+              <img src={logoImage} alt="SeguroAuto AI Logo" className="w-full h-full object-cover" />
             </div>
-            <span className="text-xl font-bold font-display text-slate-900 tracking-tight">
+            <span className="text-xl font-bold font-display text-slate-100 tracking-tight">
               SeguroAuto <span className="text-brand-secondary">AI</span>
             </span>
           </div>
@@ -269,7 +407,7 @@ export default function App() {
               {activeView === 'chat' ? 'Seguro Inteligente em Minutos' : 'Operacao de Atendentes'}
             </div>
             
-            <h1 className="text-5xl md:text-7xl font-extrabold text-slate-900 leading-[1.1] mb-6">
+            <h1 className="text-5xl md:text-7xl font-extrabold text-slate-100 leading-[1.1] mb-6">
               {activeView === 'chat' ? (
                 <>
                   Proteção real para quem <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-primary to-brand-secondary">vive intensamente.</span>
@@ -281,7 +419,7 @@ export default function App() {
               )}
             </h1>
             
-            <p className="text-lg md:text-xl text-slate-600 mb-10 max-w-lg leading-relaxed">
+            <p className="text-lg md:text-xl text-slate-400 mb-10 max-w-lg leading-relaxed">
               {activeView === 'chat'
                 ? 'Diga adeus à burocracia. Nosso agente de IA encontra a cobertura perfeita para você e seu veículo em segundos.'
                 : 'Cadastre e mantenha os atendentes PF e PJ para o roteamento automatico dos leads da triagem.'}
@@ -306,21 +444,34 @@ export default function App() {
                     { icon: <CreditCard />, title: "Preço Justo", desc: "Pague apenas pelo que você usa." },
                     { icon: <PhoneCall />, title: "Assistência Rápida", desc: "Guincho e reparos em um toque." }
                   ].map((item, i) => (
-                    <div key={i} className="flex gap-4 p-4 rounded-2xl bg-white border border-slate-100 shadow-sm">
+                    <div key={i} className="flex gap-4 p-4 rounded-2xl bg-slate-800/50 backdrop-blur-sm border border-slate-700 shadow-sm">
                       <div className="text-brand-secondary shrink-0">{item.icon}</div>
                       <div>
-                        <h3 className="font-bold text-slate-900">{item.title}</h3>
-                        <p className="text-sm text-slate-500">{item.desc}</p>
+                        <h3 className="font-bold text-slate-100">{item.title}</h3>
+                        <p className="text-sm text-slate-400">{item.desc}</p>
                       </div>
                     </div>
                   ))}
                 </div>
               </>
             ) : (
-              <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-xl">
-                <h2 className="text-2xl font-bold text-slate-900 flex items-center gap-2 mb-6">
+              <div className="rounded-3xl border border-slate-700 bg-slate-800 p-6 shadow-xl">
+                <h2 className="text-2xl font-bold text-slate-100 flex items-center gap-2 mb-6">
                   <Users size={22} className="text-brand-secondary" /> Cadastro de Atendentes
                 </h2>
+
+                <div className="mb-5">
+                  <label className="block text-xs font-semibold text-slate-400 mb-2">
+                    Chave administrativa
+                  </label>
+                  <input
+                    value={adminApiKey}
+                    onChange={(e) => setAdminApiKey(e.target.value)}
+                    type="password"
+                    placeholder="Informe a ADMIN_API_KEY"
+                    className="w-full border border-slate-600 bg-slate-900 text-white rounded-xl p-3 text-sm focus:outline-none focus:border-brand-primary"
+                  />
+                </div>
 
                 <div className="flex gap-2 mb-5">
                   <button
@@ -329,7 +480,7 @@ export default function App() {
                       'px-4 py-2 rounded-xl text-sm font-semibold border',
                       selectedSegment === 'PF'
                         ? 'bg-brand-primary text-white border-brand-primary'
-                        : 'bg-white text-slate-700 border-slate-300'
+                        : 'bg-slate-900 text-slate-300 border-slate-700 hover:bg-slate-700 transition-colors'
                     )}
                   >
                     Pessoa Fisica (PF)
@@ -340,7 +491,7 @@ export default function App() {
                       'px-4 py-2 rounded-xl text-sm font-semibold border',
                       selectedSegment === 'PJ'
                         ? 'bg-brand-primary text-white border-brand-primary'
-                        : 'bg-white text-slate-700 border-slate-300'
+                        : 'bg-slate-900 text-slate-300 border-slate-700 hover:bg-slate-700 transition-colors'
                     )}
                   >
                     Pessoa Juridica (PJ)
@@ -408,20 +559,20 @@ export default function App() {
 
         {/* Right Panel: AI Chat Agent */}
         {activeView === 'chat' && <aside className={cn(
-          "w-full md:w-[450px] bg-white border-l border-slate-100 flex flex-col h-[calc(100vh-64px)] fixed inset-y-16 right-0 transition-transform duration-300 md:relative md:inset-0 md:translate-x-0 z-40 shadow-2xl md:shadow-none",
+          "w-full md:w-[450px] bg-slate-800/80 backdrop-blur-xl border-l border-slate-700 flex flex-col h-[calc(100vh-64px)] fixed inset-y-16 right-0 transition-transform duration-300 md:relative md:inset-0 md:translate-x-0 z-40 shadow-2xl shadow-black/50 md:shadow-none",
           showMobileChat ? "translate-x-0" : "translate-x-full"
         )}>
           {/* Chat Header */}
-          <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+          <div className="p-4 border-b border-slate-700 flex items-center justify-between bg-slate-800/90">
             <div className="flex items-center gap-3">
               <div className="relative">
-                <div className="w-10 h-10 bg-slate-200 rounded-full flex items-center justify-center overflow-hidden">
-                  <User className="text-slate-500" />
+                <div className="w-10 h-10 bg-transparent rounded-full flex items-center justify-center overflow-hidden">
+                  <img src={liaAvatar} alt="Lia Avatar" className="w-full h-full object-cover scale-110" />
                 </div>
-                <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white rounded-full"></div>
+                <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-slate-800 rounded-full"></div>
               </div>
               <div className="text-left">
-                <h2 className="font-bold text-slate-900 leading-none">Consultor Auto AI</h2>
+                <h2 className="font-bold text-slate-100 leading-none">Lia - SeguroAuto AI</h2>
                 <span className="text-xs text-green-600 font-medium tracking-wide">Online agora {protocol ? `• Protocolo ${protocol}` : ''}</span>
               </div>
             </div>
@@ -441,50 +592,85 @@ export default function App() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 className={cn(
-                  "flex flex-col max-w-[85%]",
-                  msg.role === 'user' ? "ml-auto" : "mr-auto"
+                  "flex items-end gap-2 max-w-[92%]",
+                  msg.role === 'user' ? "ml-auto flex-row-reverse" : "mr-auto"
                 )}
               >
                 <div className={cn(
-                  "px-4 py-3 rounded-2xl text-sm leading-relaxed text-left",
-                  msg.role === 'user' 
-                    ? "bg-brand-primary text-white rounded-tr-none shadow-md"
-                    : "bg-slate-100 text-slate-800 rounded-tl-none border border-slate-200"
+                  "w-8 h-8 shrink-0 rounded-full flex items-center justify-center overflow-hidden border",
+                  msg.role === 'user'
+                    ? "border-brand-primary/50 shadow-sm"
+                    : "border-slate-600 shadow-sm"
                 )}>
-                  <div className="markdown-body">
-                    <ReactMarkdown>
-                      {msg.content}
-                    </ReactMarkdown>
-                  </div>
+                  {msg.role === 'user' ? <img src={userAvatar} alt="User" className="w-full h-full object-cover scale-110" /> : <img src={liaAvatar} alt="Lia" className="w-full h-full object-cover scale-110" />}
                 </div>
-                <span className={cn(
-                  "text-[10px] text-slate-400 mt-1 px-1",
-                  msg.role === 'user' ? "text-right" : "text-left"
-                )}>
-                  {msg.role === 'user' ? 'Você' : 'ChatAuto AI'} • Agora
-                </span>
+                <div className={cn("flex flex-col max-w-[calc(100%-2.5rem)]", msg.role === 'user' ? "items-end" : "items-start")}>
+                  <div className={cn(
+                    "px-4 py-3 rounded-2xl text-sm leading-relaxed text-left",
+                    msg.role === 'user' 
+                      ? "bg-brand-primary text-white rounded-tr-none shadow-md shadow-brand-primary/20"
+                      : "bg-slate-700/80 text-slate-100 rounded-tl-none border border-slate-600 shadow-sm"
+                  )}>
+                    <div className="markdown-body">
+                      <ReactMarkdown>
+                        {msg.content}
+                      </ReactMarkdown>
+                    </div>
+                  </div>
+                  <span className={cn(
+                    "text-[10px] text-slate-400 mt-1 px-1",
+                    msg.role === 'user' ? "text-right" : "text-left"
+                  )}>
+                    {msg.role === 'user' ? 'Você' : 'Lia - assistente virtual'} • Agora
+                  </span>
+                </div>
               </motion.div>
             ))}
             
             {isTyping && (
-              <div className="flex gap-1 p-4 mr-auto">
-                <motion.div animate={{ scale: [1, 1.2, 1] }} transition={{ repeat: Infinity, duration: 1 }} className="w-2 h-2 bg-slate-300 rounded-full" />
-                <motion.div animate={{ scale: [1, 1.2, 1] }} transition={{ repeat: Infinity, duration: 1, delay: 0.2 }} className="w-2 h-2 bg-slate-300 rounded-full" />
-                <motion.div animate={{ scale: [1, 1.2, 1] }} transition={{ repeat: Infinity, duration: 1, delay: 0.4 }} className="w-2 h-2 bg-slate-300 rounded-full" />
+              <div className="flex items-center gap-2 p-2 mr-auto">
+                <div className="w-8 h-8 rounded-full bg-transparent border border-slate-600 flex items-center justify-center shadow-sm overflow-hidden">
+                  <img src={liaAvatar} alt="Lia" className="w-full h-full object-cover scale-110" />
+                </div>
+                <div className="flex gap-1 px-4 py-3 bg-slate-700/80 border border-slate-600 rounded-2xl rounded-tl-none shadow-sm">
+                  <motion.div animate={{ scale: [1, 1.2, 1] }} transition={{ repeat: Infinity, duration: 1 }} className="w-2 h-2 bg-slate-300 rounded-full" />
+                  <motion.div animate={{ scale: [1, 1.2, 1] }} transition={{ repeat: Infinity, duration: 1, delay: 0.2 }} className="w-2 h-2 bg-slate-300 rounded-full" />
+                  <motion.div animate={{ scale: [1, 1.2, 1] }} transition={{ repeat: Infinity, duration: 1, delay: 0.4 }} className="w-2 h-2 bg-slate-300 rounded-full" />
+                </div>
               </div>
             )}
           </div>
 
           {/* Input Area */}
-          <div className="p-4 border-t border-slate-100">
+          <div className="p-4 border-t border-slate-700 bg-slate-800/95">
+            {quickReplies.length > 0 && (
+              <div className="flex flex-wrap gap-2 mb-3">
+                {quickReplies.map((reply) => (
+                  <button
+                    key={reply}
+                    type="button"
+                    onClick={() => handleQuickReply(reply)}
+                    disabled={isTyping}
+                    className="px-3 py-2 text-xs font-medium rounded-xl border border-slate-600 bg-slate-800 text-slate-300 hover:border-brand-primary/50 hover:text-white transition-colors disabled:opacity-50 shadow-sm"
+                  >
+                    {reply}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="relative group">
-              <input
-                type="text"
+              <textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    if (!isTyping && input.trim()) handleSendMessage();
+                  }
+                }}
                 placeholder="Pergunte sobre coberturas, preços..."
-                className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 pl-5 pr-12 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary/20 focus:border-brand-primary/50 transition-all placeholder:text-slate-400"
+                rows={2}
+                className="w-full bg-slate-900/50 border border-slate-600 rounded-2xl py-3 pl-4 pr-12 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-brand-primary/50 transition-all placeholder:text-slate-500 resize-none scrollbar-hide"
               />
               <button
                 onClick={handleSendMessage}
@@ -494,9 +680,18 @@ export default function App() {
                 <Send size={18} />
               </button>
             </div>
-            <p className="text-[10px] text-center text-slate-400 mt-3 flex items-center justify-center gap-1">
-              <Info size={10} /> Nossa IA pode cometer erros. Verifique informações importantes.
-            </p>
+            <div className="mt-3 flex items-center justify-between gap-3">
+              <p className="text-[10px] text-slate-400 flex items-center gap-1">
+                <Info size={10} /> Assistente virtual. Não informe dados desnecessários. Usamos suas informações para triagem e contato sobre seguro auto.
+              </p>
+              <button
+                type="button"
+                onClick={resetChat}
+                className="shrink-0 inline-flex items-center gap-1 text-[10px] font-medium text-slate-500 hover:text-brand-primary transition-colors"
+              >
+                <RotateCcw size={11} /> Nova conversa
+              </button>
+            </div>
           </div>
         </aside>}
 
@@ -517,8 +712,8 @@ export default function App() {
       <footer className="bg-slate-900 py-10 mt-auto">
         <div className="max-w-7xl mx-auto px-4 flex flex-col md:flex-row justify-between items-center gap-6">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-brand-primary/20 rounded-lg flex items-center justify-center text-brand-primary border border-brand-primary/30">
-              <ShieldCheck size={20} />
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center overflow-hidden">
+              <img src={logoImage} alt="SeguroAuto AI Logo" className="w-full h-full object-cover" />
             </div>
             <span className="text-white font-display font-bold">SeguroAuto AI</span>
           </div>

@@ -4,7 +4,7 @@
 
 O agente faz triagem de interessados em seguro auto, responde perguntas comuns e encaminha o lead para o atendente correto por fluxo (PF ou PJ).
 
-Nao e emissor de apolice. Ele atua como pre-atendimento inteligente + roteador de leads.
+Não é emissor de apólice. Ele atua como pré-atendimento inteligente + roteador de leads.
 
 ## Entradas do agente
 
@@ -29,7 +29,7 @@ Nao e emissor de apolice. Ele atua como pre-atendimento inteligente + roteador d
 ### 2) Coleta obrigatoria
 
 - Agente valida os campos minimos de segurado e veiculo.
-- Sem campos minimos completos, nao encaminha para humano.
+- Sem campos mínimos completos, não encaminha para humano.
 
 ### 3) Duvidas frequentes
 
@@ -80,9 +80,9 @@ Se faltarem campos obrigatorios, retorno obrigatorio: `status = MISSING_DATA`.
 ## Seguranca e infraestrutura
 
 - LLM: Google Gemini via LangChain.
-- Chave da API em secret (Docker Secret), nao no git.
+- Chave da API em secret (Docker Secret), não no git.
 - Persistencia em PostgreSQL.
-- Execucao via Docker Compose (frontend + backend + postgres).
+- Execução via Docker Compose (frontend + backend + postgres).
 
 ## Resultado esperado
 
