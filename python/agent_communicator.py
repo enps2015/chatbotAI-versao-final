@@ -53,11 +53,14 @@ def resolve_style_config(config: dict, payload: dict) -> dict:
     return selected
 
 
-def choose_bridge(config: dict) -> str:
+def choose_bridge(config: dict, first_name: str = "") -> str:
     bridges = config.get("friendly_bridges", [])
     if not bridges:
         return ""
-    return random.choice(bridges)
+    bridge = random.choice(bridges)
+    if first_name and not bridge.endswith(f", {first_name}."):
+        bridge = bridge.rstrip(".") + f", {first_name}."
+    return bridge
 
 
 def is_small_talk(text: str) -> bool:
@@ -90,6 +93,8 @@ def build_reply(payload: dict, config: dict) -> str:
     protocol = payload.get("protocol")
     is_routed = bool(payload.get("isRouted"))
     include_intro = bool(payload.get("includeIntro"))
+    full_name = payload.get("fullName")
+    first_name = full_name.split()[0] if full_name else ""
 
     if stage == "sinistro_handoff":
         return str(
@@ -108,13 +113,15 @@ def build_reply(payload: dict, config: dict) -> str:
         parts.append(str(faq_answer))
 
     if stage == "routed" or is_routed:
-        bridge = choose_bridge(config)
+        bridge = choose_bridge(config, first_name)
         if bridge:
             parts.append(bridge)
         routing_line = str(config.get("routing_success", "")).format(
             assigned=assigned or "atendente especializado"
         )
         parts.append(routing_line)
+        if context_snippet:
+            parts.append(f"Resumo da sua solicitação: {context_snippet}")
         if protocol:
             parts.append(str(config.get("protocol_line", "")).format(protocol=protocol))
         parts.append(str(config.get("compliance_line", "")))
@@ -140,10 +147,20 @@ def build_reply(payload: dict, config: dict) -> str:
 
     if collecting_transition:
         # Primeira entrada na coleta: avisa o estilo e já faz a primeira pergunta.
-        parts.append(str(config.get("missing_data_intro", "")))
+        if faq_answer:
+            parts.append(str(faq_answer))
+        
+        intro = str(config.get("missing_data_intro", ""))
+        if first_name and intro:
+            if "Ótimo!" in intro:
+                intro = intro.replace("Ótimo!", f"Muito prazer, {first_name}!")
+            else:
+                intro = f"Muito prazer, {first_name}! {intro}"
+            
+        parts.append(intro)
     else:
         # Turnos seguintes: apenas uma ponte leve antes da pergunta.
-        bridge = choose_bridge(config)
+        bridge = choose_bridge(config, first_name)
         if bridge:
             parts.append(bridge)
 

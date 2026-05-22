@@ -39,7 +39,7 @@ Nas paginas em subpastas (ex: `supervised/`):
   async function conversar() {
     const resposta = await api.chat({
       sessionId: "sessao-demo-1",
-      message: "Tenho um SUV 2022 e uso diario. Qual cobertura voce recomenda?",
+      message: "Tenho um SUV 2022 e uso diário. Qual cobertura você recomenda?",
       customerProfile: {
         age: 33,
         city: "Sao Paulo",

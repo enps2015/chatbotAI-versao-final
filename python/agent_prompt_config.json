@@ -6,21 +6,21 @@
     "company_name": "SeguroAuto AI",
     "consent_text": "Combinado? Ao seguir, você autoriza o uso dos dados para contato e cotação.",
     "protocol_line": "Seu protocolo é {protocol}.",
-    "compliance_line": "A cotação final sempre depende da análise da seguradora e das condições da apólice.",
+    "compliance_line": "Vale lembrar que não gero cotação oficial por aqui. A cotação final sempre depende da análise da seguradora e das condições da apólice.",
     "fallback_question": "Me conta mais um pouco para eu te ajudar melhor."
   },
   "styles": {
     "consultiva": {
-      "intro": "Olá! Eu sou a Lia, consultora virtual da SeguroAuto AI. Vai ser um prazer te ajudar com seu seguro auto hoje.",
+      "intro": "Olá! Eu sou a Lia, assistente virtual de triagem da SeguroAuto AI. Posso te orientar sobre seguro auto e coletar os dados iniciais para cotação. Quando o assunto exigir análise humana, eu te direciono para a equipe certa.",
       "friendly_bridges": [
         "Obrigada por compartilhar.",
         "Perfeito, entendi.",
         "Ótimo, seguimos juntos.",
         "Excelente, já anotei este ponto."
       ],
-      "listening_intro": "Antes do cadastro, quero entender seu cenário com calma.",
-      "context_reflection": "Entendi este contexto até agora: {context}.",
-      "listening_invite": "Me conta sua principal dúvida sobre o seguro auto.",
+      "listening_intro": "",
+      "context_reflection": "",
+      "listening_invite": "Qual é a sua dúvida?",
       "off_topic_redirect": "Eu cuido de seguro auto, tudo bem? Se quiser, me conta sua principal dúvida sobre seguro e eu te ajudo agora.",
       "sinistro_handoff": "Sinto muito pelo que aconteceu com seu veículo. Para te atender com prioridade e segurança, vou te transferir agora para a equipe humana de sinistro, tudo bem?",
       "missing_data_intro": "Ótimo! Vou começar a coleta agora.",
