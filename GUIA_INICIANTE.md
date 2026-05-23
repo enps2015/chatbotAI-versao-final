@@ -43,10 +43,10 @@ O nosso projeto usa o modelo Gemini (a inteligência artificial do Google). Para
 1. Acesse o site do **[Google AI Studio (clique aqui)](https://aistudio.google.com/app/apikey)**.
 2. Faça login com a sua conta do Google (seu Gmail normal).
 3. Clique no botão azul para **Criar a Chave (Create API key)** e depois **copie** a chave gerada (uma sopa de letrinhas bem comprida).
-4. Agora, de volta à pasta do nosso projeto, você vai notar que o arquivo `iniciar.bat` criou uma nova pasta chamada **`secrets`**.
-5. Entre nessa pasta `secrets` e abra o arquivo de texto chamado **`gemini_api_key.txt`**.
-6. Apague o que estiver lá dentro, **cole a sua chave** do Gemini e **salve** o arquivo.
-7. Volte na pasta anterior e dê um **duplo clique no `iniciar.bat` DE NOVO**! (Isso serve apenas para reiniciar o robô para que ele leia a sua nova chave).
+4. Volte para a página do projeto (que o atalho `iniciar.bat` acabou de abrir no seu navegador).
+5. Uma caixinha bonita chamada **"Configure a IA"** vai estar esperando você na tela inicial.
+6. Apenas **cole a sua chave** lá dentro e clique em **Salvar Chave e Iniciar**.
+7. Pronto! A inteligência artificial vai conectar na mesma hora e sem complicações.
 
 ---
 
@@ -54,8 +54,8 @@ O nosso projeto usa o modelo Gemini (a inteligência artificial do Google). Para
 
 O melhor de tudo é que o atalho `iniciar.bat` **abre o navegador automaticamente** para você quando termina de carregar.
 
-Caso feche sem querer, basta abrir o seu navegador (Google Chrome, Edge, Safari, etc.) e acessar:
+Caso feche a tela sem querer no futuro, basta abrir o seu navegador (Google Chrome, Edge, Safari, etc.) e acessar:
 
 👉 **[http://localhost:8080](http://localhost:8080)**
 
-**Pronto! 🎉** A interface do nosso Assistente Virtual vai aparecer e você já pode começar a conversar com ele!
+**Pronto! 🎉** A interface do nosso Assistente Virtual já estará online com o "crachá" cadastrado e você já pode começar a conversar com ele!
