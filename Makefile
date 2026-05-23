@@ -1,4 +1,4 @@
-.PHONY: setup up down logs restart clean
+.PHONY: setup up down logs restart clean build shell-backend shell-frontend
 
 # Comando padrão caso a pessoa digite apenas 'make'
 all: up
@@ -38,3 +38,15 @@ restart:
 clean: down
 	@echo "==> Limpando tudo (Aviso: O banco de dados sera apagado!)..."
 	docker compose down -v
+
+build:
+	@echo "==> Reconstruindo imagens sem cache..."
+	docker compose build --no-cache
+
+shell-backend:
+	@echo "==> Acessando o terminal do backend..."
+	docker compose exec backend sh
+
+shell-frontend:
+	@echo "==> Acessando o terminal do frontend..."
+	docker compose exec frontend sh
