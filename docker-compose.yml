@@ -37,7 +37,7 @@ services:
       CHAT_RATE_LIMIT_WINDOW_MS: ${CHAT_RATE_LIMIT_WINDOW_MS:-60000}
       CHAT_RATE_LIMIT_MAX: ${CHAT_RATE_LIMIT_MAX:-30}
     volumes:
-      - ./secrets/gemini_api_key.txt:/run/secrets/gemini_api_key:ro,z
+      - ./secrets/gemini_api_key.txt:/run/secrets/gemini_api_key:rw,z
     ports:
       - "3000:3000"
     healthcheck:
