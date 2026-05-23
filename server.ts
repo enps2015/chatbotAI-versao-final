@@ -783,14 +783,23 @@ function readGeminiApiKey(): string {
   return process.env.GEMINI_API_KEY ?? "";
 }
 
-const geminiApiKey = readGeminiApiKey();
-const llm = geminiApiKey
+let geminiApiKey = readGeminiApiKey();
+let llm = geminiApiKey
   ? new ChatGoogleGenerativeAI({
       apiKey: geminiApiKey,
       model: process.env.GEMINI_MODEL || "gemini-2.5-flash",
       temperature: 0.1,
     })
   : null;
+
+function reloadGeminiLLM(newKey: string) {
+  geminiApiKey = newKey;
+  llm = new ChatGoogleGenerativeAI({
+    apiKey: geminiApiKey,
+    model: process.env.GEMINI_MODEL || "gemini-2.5-flash",
+    temperature: 0.1,
+  });
+}
 
 const pool = new Pool({
   connectionString:
@@ -1849,6 +1858,27 @@ async function startServer() {
       db: dbOk ? "up" : "down",
       llm: llm ? "gemini" : "fallback",
     });
+  });
+
+  app.post("/api/settings/apikey", async (req, res) => {
+    const { apiKey } = req.body;
+    if (!apiKey) {
+      res.status(400).json({ error: "Chave nao informada" });
+      return;
+    }
+    
+    try {
+      if (process.env.GEMINI_API_KEY_FILE) {
+        fs.writeFileSync(process.env.GEMINI_API_KEY_FILE, apiKey.trim(), "utf-8");
+      } else {
+        process.env.GEMINI_API_KEY = apiKey.trim();
+      }
+      reloadGeminiLLM(apiKey.trim());
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Erro ao salvar api key:", err);
+      res.status(500).json({ error: "Erro ao salvar a chave no servidor" });
+    }
   });
 
   app.get("/api/agents", requireAdmin, async (_req, res) => {

@@ -125,6 +125,24 @@ Tudo pronto! Você já pode abrir o navegador para interagir e visualizar:
 
 ---
 
+## 🛠️ Comandos Úteis (Makefile)
+
+Para facilitar a execução no dia a dia, o projeto inclui um `Makefile`. Para uma explicação detalhada sobre como essas automações funcionam (e como elas substituem comandos complexos do Docker), leia o guia completo no arquivo **[USANDO_MAKE.md](./USANDO_MAKE.md)**.
+
+Principais atalhos que você pode rodar no terminal:
+
+- `make setup`: Cria o arquivo `.env` (se não existir) e o `secrets/gemini_api_key.txt`.
+- `make up` (ou apenas `make`): Executa o `setup` automaticamente e inicia a aplicação no Docker (substitui o `docker compose up -d`).
+- `make down`: Desliga os containers da aplicação.
+- `make logs`: Exibe os logs dos containers em tempo real (pressione `Ctrl+C` para sair).
+- `make restart`: Reinicia todos os containers.
+- `make build`: Força a reconstrução das imagens do Docker do zero (sem cache).
+- `make shell-backend`: Abre o terminal interativo de dentro do container do backend.
+- `make shell-frontend`: Abre o terminal interativo de dentro do container do frontend.
+- `make clean`: Desliga a aplicação e **apaga os volumes** (destrói os dados salvos no banco de dados local).
+
+---
+
 ## 🧪 Como Testar o Fluxo (Roteiro de Validação do MVP)
 
 1. **Teste de Gatilhos Iniciais:** Entre em `http://localhost:8080`. Clique no botão de *"Tirar Dúvida"*. A Lia não começará a coleta de dados, mas perguntará qual sua dúvida. Faça uma pergunta (ex: "Cobre vidro trincado?").

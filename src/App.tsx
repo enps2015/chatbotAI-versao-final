@@ -146,6 +146,44 @@ export default function App() {
     active: true,
   });
 
+  const [llmStatus, setLlmStatus] = useState<'gemini' | 'fallback' | 'checking'>('checking');
+  const [geminiApiKeyInput, setGeminiApiKeyInput] = useState('');
+  const [savingKey, setSavingKey] = useState(false);
+
+  const checkHealth = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/health`);
+      const data = await res.json();
+      setLlmStatus(data.llm);
+    } catch {
+      setLlmStatus('fallback');
+    }
+  };
+
+  useEffect(() => {
+    checkHealth();
+  }, []);
+
+  const saveApiKey = async () => {
+    if (!geminiApiKeyInput.trim()) return;
+    setSavingKey(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/settings/apikey`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: geminiApiKeyInput }),
+      });
+      if (res.ok) {
+        await checkHealth();
+        setGeminiApiKeyInput('');
+      }
+    } catch {
+      // ignore
+    } finally {
+      setSavingKey(false);
+    }
+  };
+
   const chatEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
 
@@ -728,6 +766,36 @@ export default function App() {
           </p>
         </div>
       </footer>
+
+      {/* API Key Modal */}
+      {llmStatus === 'fallback' && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/80 backdrop-blur-sm p-4">
+          <div className="bg-slate-800 border border-slate-700 rounded-3xl p-8 max-w-md w-full shadow-2xl relative">
+            <div className="flex items-center gap-3 mb-6">
+              <Zap className="text-brand-secondary" size={28} />
+              <h3 className="text-2xl font-bold text-slate-100">Configure a IA</h3>
+            </div>
+            <p className="text-slate-300 mb-6 leading-relaxed text-sm">
+              Para conversar comigo, você precisa fornecer uma chave da API do Google Gemini.
+              Se você não tiver uma, pode criar gratuitamente no <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-brand-primary font-bold hover:underline">Google AI Studio</a>.
+            </p>
+            <input
+              type="password"
+              placeholder="Cole sua API Key aqui..."
+              value={geminiApiKeyInput}
+              onChange={(e) => setGeminiApiKeyInput(e.target.value)}
+              className="w-full bg-slate-900 border border-slate-600 rounded-xl py-3 px-4 text-slate-100 mb-6 focus:outline-none focus:border-brand-primary"
+            />
+            <button
+              onClick={saveApiKey}
+              disabled={savingKey || !geminiApiKeyInput.trim()}
+              className="w-full bg-brand-primary text-white py-3 rounded-xl font-bold hover:bg-brand-primary/90 transition-colors disabled:opacity-50"
+            >
+              {savingKey ? 'Salvando e Conectando...' : 'Salvar Chave e Iniciar'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
