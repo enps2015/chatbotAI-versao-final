@@ -125,6 +125,19 @@ Tudo pronto! Você já pode abrir o navegador para interagir e visualizar:
 
 ---
 
+## 🛠️ Comandos Úteis (Makefile)
+
+Para facilitar a execução no dia a dia, o projeto inclui um `Makefile`. Se você estiver em um ambiente Linux, macOS ou usando o WSL no Windows, pode rodar os seguintes comandos no terminal:
+
+- `make setup`: Cria o arquivo `.env` (se não existir) e o `secrets/gemini_api_key.txt`.
+- `make up` (ou apenas `make`): Executa o `setup` automaticamente e inicia a aplicação no Docker.
+- `make down`: Desliga os containers da aplicação.
+- `make logs`: Exibe os logs dos containers em tempo real (pressione `Ctrl+C` para sair).
+- `make restart`: Reinicia todos os containers.
+- `make clean`: Desliga a aplicação e **apaga os volumes** (destrói os dados salvos no banco de dados local).
+
+---
+
 ## 🧪 Como Testar o Fluxo (Roteiro de Validação do MVP)
 
 1. **Teste de Gatilhos Iniciais:** Entre em `http://localhost:8080`. Clique no botão de *"Tirar Dúvida"*. A Lia não começará a coleta de dados, mas perguntará qual sua dúvida. Faça uma pergunta (ex: "Cobre vidro trincado?").
