@@ -20,9 +20,8 @@ if not exist secrets (
 
 if not exist secrets\gemini_api_key.txt (
     echo [3/4] Arquivo de chave nao encontrado. Criando um em branco...
-    echo cole_sua_chave_aqui > secrets\gemini_api_key.txt
-    echo ATENCAO: Voce precisa abrir a pasta 'secrets' e colar sua chave do Gemini
-    echo dentro do arquivo 'gemini_api_key.txt' depois!
+    type nul > secrets\gemini_api_key.txt
+    echo ATENCAO: Voce podera configurar sua chave do Gemini direto na tela que vai abrir no navegador!
     echo.
 ) else (
     echo [2/4] Pasta e arquivo de chaves verificados. OK!

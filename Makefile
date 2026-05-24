@@ -13,9 +13,9 @@ setup:
 	fi
 	@mkdir -p secrets
 	@if [ ! -f secrets/gemini_api_key.txt ]; then \
-		echo "cole_sua_chave_aqui" > secrets/gemini_api_key.txt; \
-		echo " [ATENCAO] Criado secrets/gemini_api_key.txt."; \
-		echo " Por favor, cole sua chave do Google AI Studio nele antes de continuar!"; \
+		touch secrets/gemini_api_key.txt; \
+		echo " [ATENCAO] Criado secrets/gemini_api_key.txt vazio."; \
+		echo " Configure sua chave do Google AI Studio pela interface no navegador!"; \
 	fi
 
 up: setup
