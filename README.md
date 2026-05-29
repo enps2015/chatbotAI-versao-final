@@ -157,9 +157,9 @@ Principais atalhos que você pode rodar no terminal:
 Como prova da execução bem-sucedida e do perfeito funcionamento do ecossistema orquestrado via Docker Compose, anexamos abaixo os artefatos visuais de demonstração da plataforma:
 
 ### 1. Demonstração em Vídeo
-Clique na imagem de pré-visualização abaixo para assistir ao vídeo de apresentação do frontend e ver o diálogo de testes com a assistente virtual Lia (abre o player de vídeo nativo do GitHub):
+Assista à apresentação do frontend e aos testes conversacionais com a assistente Lia diretamente no player de vídeo interativo abaixo:
 
-[![▶️ CLIQUE AQUI PARA ASSISTIR AO VÍDEO DE DEMONSTRAÇÃO (apresentando-chatbotAI.mp4)](img/catptura-tela-01.png)](img/apresentando-chatbotAI.mp4)
+https://github.com/enps2015/chatbotAI-versao-final/raw/feature/entrega-final-desafio2/img/apresentando-chatbotAI.mp4
 
 ### 2. Capturas de Tela (Evidências Funcionais)
 
