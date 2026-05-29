@@ -159,12 +159,7 @@ Como prova da execução bem-sucedida e do perfeito funcionamento do ecossistema
 ### 1. Demonstração em Vídeo
 Clique na imagem de pré-visualização abaixo para assistir ao vídeo de apresentação do frontend e ver o diálogo de testes com a assistente virtual Lia (abre o player de vídeo nativo do GitHub):
 
-<div align="center">
-  <a href="img/apresentando-chatbotAI.mp4" target="_blank">
-    <img src="img/catptura-tela-01.png" alt="Clique para assistir ao vídeo de demonstração" width="100%" />
-    <p><b>▶️ CLIQUE AQUI PARA ASSISTIR AO VÍDEO DE DEMONSTRAÇÃO (apresentando-chatbotAI.mp4)</b></p>
-  </a>
-</div>
+[![▶️ CLIQUE AQUI PARA ASSISTIR AO VÍDEO DE DEMONSTRAÇÃO (apresentando-chatbotAI.mp4)](img/catptura-tela-01.png)](img/apresentando-chatbotAI.mp4)
 
 ### 2. Capturas de Tela (Evidências Funcionais)
 
