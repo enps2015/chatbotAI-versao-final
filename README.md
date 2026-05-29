@@ -152,6 +152,41 @@ Principais atalhos que você pode rodar no terminal:
 
 ---
 
+## 🎥 Evidências de Execução e Demonstração
+
+Como prova da execução bem-sucedida e do perfeito funcionamento do ecossistema orquestrado via Docker Compose, anexamos abaixo os artefatos visuais de demonstração da plataforma:
+
+### 1. Demonstração em Vídeo
+Assista ao vídeo de apresentação do frontend da aplicação e veja os testes interativos com a assistente virtual Lia:
+
+<div align="center">
+  <video src="img/apresentando-chatbotAI.mp4" width="100%" controls poster="img/catptura-tela-01.png">
+    Seu navegador não suporta a tag de vídeo.
+  </video>
+</div>
+
+### 2. Capturas de Tela (Evidências Funcionais)
+
+#### **Evidência 01: Tela de Inicialização e Modal de Configuração de IA**
+Exibição do comportamento seguro do frontend que, ao detectar o backend em modo *fallback*, apresenta o modal para fornecimento dinâmico da chave API do Gemini de forma transparente e responsiva:
+<div align="center">
+  <img src="img/catptura-tela-03.png" alt="Modal de Configuração de API Key" width="100%" />
+</div>
+
+#### **Evidência 02: Fluxo de Diálogo Conversacional com a Assistente Lia**
+Interface do chat principal ativa e estilizada, com avatares e balões de diálogo bem definidos, botões de ação rápida de fácil acesso e o aviso claro de compliance com a LGPD no rodapé:
+<div align="center">
+  <img src="img/catptura-tela-01.png" alt="Interface de Diálogo da Lia" width="100%" />
+</div>
+
+#### **Evidência 03: Painel Administrativo de Controle de Profissionais**
+Interface administrativa integrada que permite cadastrar, listar, alternar o status ativo/inativo e atualizar os corretores PF e PJ responsáveis por receber os leads roteados:
+<div align="center">
+  <img src="img/catptura-tela-02.png" alt="Painel Administrativo de Atendentes" width="100%" />
+</div>
+
+---
+
 ## ⚠️ Limitações Conhecidas
 
 - **Não é um agente autônomo pleno (Sem Tool Calling livre):** A arquitetura utiliza a IA primariamente para interpretação/extração de texto e RAG de FAQ, mas o fluxo da conversa em si é orquestrado de forma estrita (State Machine via TypeScript) para evitar comportamento não-determinístico.
