@@ -159,7 +159,7 @@ Como prova da execução bem-sucedida e do perfeito funcionamento do ecossistema
 ### 1. Demonstração em Vídeo
 Assista à apresentação do frontend e aos testes conversacionais com a assistente Lia diretamente no player de vídeo interativo abaixo:
 
-https://github.com/enps2015/chatbotAI-versao-final/raw/feature/entrega-final-desafio2/img/apresentando-chatbotAI.mp4
+<video src="https://github.com/enps2015/chatbotAI-versao-final/raw/feature/entrega-final-desafio2/img/apresentando-chatbotAI.mp4" width="100%" controls></video>
 
 ### 2. Capturas de Tela (Evidências Funcionais)
 
